@@ -5,6 +5,7 @@ from tqdm import tqdm
 import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from collections import defaultdict
 
 def transform_name(product_name):
     # IMPLEMENT
@@ -20,7 +21,7 @@ general.add_argument("--output", default="/workspace/datasets/fasttext/output.fa
 general.add_argument("--label", default="id", help="id is default and needed for downsteam use, but name is helpful for debugging")
 
 # IMPLEMENT: Setting min_products removes infrequent categories and makes the classifier's task easier.
-general.add_argument("--min_products", default=0, type=int, help="The minimum number of products per category (default is 0).")
+general.add_argument("--min_products", default=500, type=int, help="The minimum number of products per category (default is 500).")
 
 args = parser.parse_args()
 output_file = args.output
@@ -58,12 +59,24 @@ def _label_filename(filename):
               labels.append((cat, transform_name(name)))
     return labels
 
+def filter_by_min_products(labels, min_products):
+    if min_products <= 0:
+        return labels
+    
+    label_counts = defaultdict(lambda: 0)
+    for label, _ in labels:
+        label_counts[label] += 1
+
+    filtered_labels = [(label, name) for (label, name) in labels if label_counts[label] >= min_products]
+    return filtered_labels
+
 if __name__ == '__main__':
     files = glob.glob(f'{directory}/*.xml')
     print("Writing results to %s" % output_file)
     with multiprocessing.Pool() as p:
-        all_labels = tqdm(p.imap(_label_filename, files), total=len(files))
+        all_labels_lists = p.imap(_label_filename, files)
+        all_labels = [(cat, name) for labels_list in all_labels_lists for (cat, name) in labels_list]
+        filtered_labels = filter_by_min_products(all_labels, min_products)
         with open(output_file, 'w') as output:
-            for label_list in all_labels:
-                for (cat, name) in label_list:
+                for (cat, name) in tqdm(filtered_labels, total=len(filtered_labels)):
                     output.write(f'__label__{cat} {name}\n')
