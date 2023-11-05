@@ -11,11 +11,17 @@ from urllib.parse import urljoin
 import pandas as pd
 import fileinput
 import logging
+import re
+import fasttext
+import nltk
+stemmer = nltk.stem.PorterStemmer()
 
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logging.basicConfig(format='%(levelname)s:%(message)s')
+
+QUERY_CLASSIFIER = fasttext.load_model("query_model.bin")
 
 # expects clicks and impressions to be in the row
 def create_prior_queries_from_group(
@@ -185,17 +191,42 @@ def create_query(user_query, click_prior_query, filters, sort="_score", sortDir=
         query_obj["_source"] = source
     return query_obj
 
+def normalize_query(query: str) -> str:
+    lowercase = query.lower()
+    alphanum = re.sub(r'[^a-zA-Z0-9]', ' ', lowercase)
+    trimmed = re.sub(r'\s+', ' ', alphanum).strip()
+    stemmed = ' '.join([stemmer.stem(word) for word in trimmed.split()])
 
-def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc"):
-    #### W3: classify the query
-    #### W3: create filters and boosts
-    # Note: you may also want to modify the `create_query` method above
-    query_obj = create_query(user_query, click_prior_query=None, filters=None, sort=sort, sortDir=sortDir, source=["name", "shortDescription"])
+    return stemmed
+
+def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc", use_classifier=False, full_hits=True):
+    filters = []
+
+    if use_classifier:
+        normalized_query = normalize_query(user_query)
+        categories, _ = QUERY_CLASSIFIER.predict(normalized_query, k=3)
+
+        if categories:
+            print(f"Classified categories: {categories}")
+            categories = [category.replace("__label__", "") for category in categories]
+            filters.append({"terms": {"categoryPathIds": categories}})
+
+
+    query_obj = create_query(user_query, click_prior_query=None, filters=filters, sort=sort, sortDir=sortDir, source=["name", "shortDescription", "categoryPathIds"])
     logging.info(query_obj)
     response = client.search(query_obj, index=index)
+
     if response and response['hits']['hits'] and len(response['hits']['hits']) > 0:
-        hits = response['hits']['hits']
-        print(json.dumps(response, indent=2))
+        if full_hits:
+            hits = response['hits']['hits']
+            print(json.dumps(response, indent=2))
+        else:
+            hits = response['hits']['hits']
+            interest_fields = [
+                {"name": hit['_source']['name'][0], "description": hit['_source']['shortDescription'][0]}
+                for hit in hits
+            ]
+            print(interest_fields)
 
 
 if __name__ == "__main__":
@@ -245,8 +276,14 @@ if __name__ == "__main__":
         query = line.rstrip()
         if query == "Exit":
             break
-        search(client=opensearch, user_query=query, index=index_name)
 
+        print("Search results without query classifier: \n")
+        search(client=opensearch, user_query=query, index=index_name, full_hits=False)
+
+        print("Search results with query classifier: \n")
+        search(client=opensearch, user_query=query, index=index_name, full_hits=False, use_classifier=True)
+
+        
         print(query_prompt)
 
     
