@@ -4,6 +4,7 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import numpy as np
 import csv
+import re
 
 # Useful if you want to perform stemming.
 import nltk
@@ -48,9 +49,38 @@ parents_df = pd.DataFrame(list(zip(categories, parents)), columns =['category', 
 queries_df = pd.read_csv(queries_file_name)[['category', 'query']]
 queries_df = queries_df[queries_df['category'].isin(categories)]
 
-# IMPLEMENT ME: Convert queries to lowercase, and optionally implement other normalization, like stemming.
+def normalize_query(query: str) -> str:
+    lowercase = query.lower()
+    alphanum = re.sub(r'[^a-zA-Z0-9]', ' ', lowercase)
+    trimmed = re.sub(r'\s+', ' ', alphanum).strip()
+    stemmed = ' '.join([stemmer.stem(word) for word in trimmed.split()])
 
-# IMPLEMENT ME: Roll up categories to ancestors to satisfy the minimum number of queries per category.
+    return stemmed
+
+queries_df['query'] = queries_df['query'].map(normalize_query)
+
+def roll_up_categories(queries_df: pd.DataFrame, parents_df: pd.DataFrame, min_queries: int) ->  pd.DataFrame:
+    category_count_df = queries_df.groupby(by='category')['query'].count().reset_index()
+
+    while True:
+        categories_to_roll_up = category_count_df[category_count_df['query'] < min_queries]['category'].tolist()
+
+        if not categories_to_roll_up:
+            break
+
+        for category in categories_to_roll_up:
+            if category != root_category_id:
+                parent = parents_df[parents_df['category'] == category]['parent'].values[0]
+                queries_df.loc[queries_df['category'] == category, 'category'] = parent
+
+        category_count_df = queries_df.groupby(by='category')['query'].count().reset_index()
+
+    return queries_df
+
+if(min_queries > 1):
+    queries_df = roll_up_categories(queries_df, parents_df, min_queries)
+
+print(f"Distinct categories: {queries_df['category'].nunique()}")
 
 # Create labels in fastText format.
 queries_df['label'] = '__label__' + queries_df['category']
